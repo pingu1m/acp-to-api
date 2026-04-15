@@ -1,0 +1,8 @@
+host = "127.0.0.1"
+port = 18134
+raw_acp = false
+raw_rest = false
+
+[providers.cursor]
+command = "agent"
+args = ["acp"]
