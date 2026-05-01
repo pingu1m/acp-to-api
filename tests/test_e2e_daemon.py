@@ -39,10 +39,23 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_for_health(port: int, timeout: float = 45.0) -> None:
+def _wait_for_health(
+    port: int,
+    timeout: float = 45.0,
+    proc: subprocess.Popen[str] | None = None,
+    stderr_path: Path | None = None,
+) -> None:
     url = f"http://127.0.0.1:{port}/health"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if proc is not None and proc.poll() is not None:
+            stderr_text = ""
+            if stderr_path and stderr_path.exists():
+                stderr_text = stderr_path.read_text()[-2000:]
+            raise RuntimeError(
+                f"Server process exited with code {proc.returncode} before "
+                f"becoming healthy.\nstderr:\n{stderr_text}"
+            )
         try:
             r = httpx.get(url, timeout=2.0)
             if r.status_code == 200:
@@ -50,7 +63,13 @@ def _wait_for_health(port: int, timeout: float = 45.0) -> None:
         except Exception:
             pass
         time.sleep(0.3)
-    raise RuntimeError(f"Server on port {port} did not become healthy in {timeout}s")
+    stderr_text = ""
+    if stderr_path and stderr_path.exists():
+        stderr_text = stderr_path.read_text()[-2000:]
+    raise RuntimeError(
+        f"Server on port {port} did not become healthy in {timeout}s\n"
+        f"stderr:\n{stderr_text}"
+    )
 
 
 def _wait_for_down(port: int, timeout: float = 10.0) -> None:
@@ -134,6 +153,8 @@ def daemon_env(tmp_path: Path) -> Iterator[DaemonEnv]:
 @pytest.fixture
 def foreground_server(daemon_env: DaemonEnv) -> Iterator[DaemonEnv]:
     """Start the server in foreground mode as a subprocess."""
+    stderr_log = daemon_env.state_dir / "serve_stderr.log"
+    stderr_fh = stderr_log.open("w")
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -148,12 +169,13 @@ def foreground_server(daemon_env: DaemonEnv) -> Iterator[DaemonEnv]:
         cwd=str(PROJECT_ROOT),
         env={**os.environ, "PYTHONPATH": str(SRC_DIR)},
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=stderr_fh,
     )
     try:
-        _wait_for_health(daemon_env.port)
+        _wait_for_health(daemon_env.port, proc=proc, stderr_path=stderr_log)
         yield daemon_env
     finally:
+        stderr_fh.close()
         if proc.poll() is None:
             proc.send_signal(signal.SIGTERM)
             try:
