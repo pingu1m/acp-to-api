@@ -8,8 +8,7 @@ from openai import OpenAI
 
 # 1x1 PNG (transparent), encoded as data URL for attachment-style image input.
 PNG_1X1_DATA_URL = (
-    "data:image/png;base64,"
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/w8AAgMBgL6N4m0AAAAASUVORK5CYII="
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/w8AAgMBgL6N4m0AAAAASUVORK5CYII="
 )
 
 

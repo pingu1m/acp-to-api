@@ -1,5 +1,12 @@
 """acp-to-api package."""
 
-__all__ = ["__version__"]
+from __future__ import annotations
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("acp-to-api")
+except PackageNotFoundError:
+    __version__ = "0.0.0-dev"
+
+__all__ = ["__version__"]

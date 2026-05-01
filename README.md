@@ -1,87 +1,79 @@
 # acp-to-api
 
-`acp-to-api` is a multi-provider proxy CLI that exposes OpenAI-compatible REST APIs backed by ACP (Agent Client Protocol) subprocess providers.
+[![PyPI version](https://img.shields.io/pypi/v/acp-to-api)](https://pypi.org/project/acp-to-api/)
+[![CI](https://github.com/pingu1m/acp-to-api/actions/workflows/ci.yml/badge.svg)](https://github.com/pingu1m/acp-to-api/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-For each configured provider, the server exposes:
+Multi-provider ACP proxy CLI that exposes OpenAI-compatible REST APIs backed by Agent Client Protocol subprocess providers.
 
-- `GET /api/v1/<provider>/openai/models`
-- `POST /api/v1/<provider>/openai/chat/completions`
+## Features
 
-The first provider implemented is Cursor CLI ACP (`agent acp`).
-
-## Runtime resilience
-
-The Cursor ACP provider monitors its subprocess health and automatically
-restarts the ACP connection if the subprocess exits unexpectedly.
-
-## Limitations
-
-- **OpenAI tuning parameters** (`temperature`, `max_tokens`, `max_completion_tokens`) are accepted in the request schema for API compatibility, but are **not forwarded** to the ACP agent — the underlying protocol does not expose these controls.
-- **Token usage** in responses is estimated from text length, not measured by the agent.
-- Only one prompt runs per provider at a time (serialized via prompt lock).
-
-## Requirements
-
-- Python 3.10 to 3.14
-- Cursor CLI `agent` command available in `PATH`
-- Cursor auth already set up (e.g. via `agent login`); this proxy does not perform ACP authentication
-
-This project uses the official ACP Python SDK:
-
-- [`agentclientprotocol/python-sdk`](https://github.com/agentclientprotocol/python-sdk)
+- **OpenAI-compatible API** -- `/chat/completions`, Responses API, and Anthropic `/v1/messages`
+- **Multiple providers** -- Cursor, Kiro, Codex (via codex-acp), Claude Code (via claude-code-acp)
+- **Runtime management** -- add, remove, and reload providers without restarting
+- **Daemon mode** -- run as a background service with `start`/`stop`/`status`/`restart`
+- **Auto-start** -- install as a macOS launchd or Linux systemd service
+- **Web dashboard** -- embedded real-time trace viewer at `/dashboard`
+- **Config hot-reload** -- watches config file for changes and applies them automatically
+- **XDG directories** -- follows XDG Base Directory spec for config and state
 
 ## Install
 
 ```bash
-uv sync --dev
+uv add acp-to-api
 ```
 
 Or with pip:
 
 ```bash
-pip install -e .
+pip install acp-to-api
 ```
 
-## Run with TOML config
+For development:
 
-Use the sample config in `acp-to-api.toml`:
+```bash
+git clone https://github.com/pingu1m/acp-to-api.git
+cd acp-to-api
+uv sync --dev
+```
+
+## Requirements
+
+- Python 3.10 to 3.14
+- At least one ACP provider CLI installed (e.g. Cursor `agent`, `kiro-cli`, `codex-acp`, `claude-code-acp`)
+
+This project uses the official [ACP Python SDK](https://github.com/agentclientprotocol/python-sdk).
+
+## Quick start
+
+```bash
+acp-to-api serve --config acp-to-api.toml
+```
+
+Or with inline provider JSON:
+
+```bash
+acp-to-api serve --provider '{"name":"cursor","command":"agent","args":["acp"]}'
+```
+
+## Configuration
+
+Example `acp-to-api.toml`:
 
 ```toml
 port = 11434
-host = "0.0.0.0"
-raw_acp = false
-raw_rest = false
+host = "127.0.0.1"
 
 [providers.cursor]
 command = "agent"
 args = ["acp"]
+
+[providers.kiro]
+command = "kiro-cli"
+args = ["acp", "--trust-all-tools"]
 ```
 
-Start:
-
-```bash
-uv run acp-to-api serve --config acp-to-api.toml
-```
-
-## Run with inline provider JSON
-
-Pass providers directly from the CLI — repeat `--provider` for multiple:
-
-```bash
-uv run acp-to-api serve \
-  --provider '{"name":"cursor","command":"agent","args":["acp"]}'
-```
-
-## Raw logging
-
-- `--raw-acp` — logs ACP JSON-RPC traffic to/from the subprocess
-- `--raw-rest` — logs incoming REST requests and outgoing responses
-
-Both use Python's `logging` module at DEBUG level. Enable `DEBUG` to see output:
-
-```bash
-PYTHONLOGLEVEL=DEBUG uv run acp-to-api serve --config acp-to-api.toml --raw-acp --raw-rest
-```
+If no config file exists, `acp-to-api` creates a starter config at `~/.config/acp-to-api/config.toml` on first run.
 
 ## OpenAI client example
 
@@ -101,22 +93,65 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)
 ```
 
-## Run E2E tests
+## Daemon mode
 
 ```bash
-uv run pytest tests/test_e2e_cursor.py -q
+acp-to-api start --config acp-to-api.toml   # background
+acp-to-api status
+acp-to-api stop
+acp-to-api restart --config acp-to-api.toml
 ```
 
-## Publishing
+Install as a system service (auto-start on boot):
+
+```bash
+acp-to-api setup --config acp-to-api.toml   # macOS launchd / Linux systemd
+acp-to-api setup --uninstall
+```
+
+## Dashboard
+
+Open `http://127.0.0.1:11434/dashboard` to see live trace events, manage providers, and inspect request/response payloads.
+
+## Raw logging
+
+- `--raw-acp` -- logs ACP JSON-RPC traffic
+- `--raw-rest` -- logs REST requests and responses
+
+## Limitations
+
+- **Tuning parameters** (`temperature`, `max_tokens`) are accepted for API compatibility but not forwarded to the ACP agent.
+- **Token usage** in responses is estimated from text length, not measured by the agent.
+- Only one prompt runs per provider at a time (serialized via prompt lock).
+
+## Security
+
+**acp-to-api is designed for local/trusted-network use only.** The API has no authentication; anyone who can reach the server can invoke providers, which spawn subprocesses.
+
+- The default bind address is `127.0.0.1` (localhost only). Use `--host 0.0.0.0` only if you trust your network.
+- If you need network access, place the server behind a reverse proxy with authentication.
+- The dashboard and trace logs capture **full request/response bodies** (prompts, completions, tool calls). Be aware of this if you pipe sensitive data through the proxy.
+
+## Run tests
+
+```bash
+uv run pytest -q
+```
+
+## Lint and format
+
+```bash
+uv run ruff check .
+uv run ruff format .
+```
+
+## Build and publish
 
 ```bash
 uv build
 uv publish
 ```
 
-Or with standard tools:
+## License
 
-```bash
-python -m build
-twine upload dist/*
-```
+[MIT](LICENSE)

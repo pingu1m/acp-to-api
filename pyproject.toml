@@ -26,10 +26,13 @@ dependencies = [
     "sse-starlette>=2.1.0",
     "typer>=0.12.0",
     "uvicorn[standard]>=0.30.0",
+    "watchfiles>=1.0.0",
 ]
 
 [project.urls]
-Repository = "https://github.com/acp-to-api/acp-to-api"
+Homepage = "https://github.com/pingu1m/acp-to-api"
+Repository = "https://github.com/pingu1m/acp-to-api"
+Changelog = "https://github.com/pingu1m/acp-to-api/blob/main/CHANGELOG.md"
 
 [project.scripts]
 acp-to-api = "acp_to_api.cli:app"
@@ -44,13 +47,31 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+acp_to_api = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/acp_to_api/dashboard.py" = ["E501"]
+
 [dependency-groups]
 dev = [
+    "ag2[openai]>=0.8.0",
     "httpx>=0.28.1",
+    "langchain>=1.2.15",
+    "langchain-openai>=1.1.14",
     "openai>=2.31.0",
+    "pydantic-ai>=0.2.0",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
+    "ruff>=0.11.0",
 ]

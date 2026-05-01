@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from typing import Literal, Optional, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-
 
 MessageRole = Literal["system", "developer", "user", "assistant", "tool"]
 
 
 class ImageUrlPart(BaseModel):
     url: str
-    detail: Optional[str] = None
+    detail: str | None = None
 
 
 class MessagePartText(BaseModel):
@@ -23,27 +22,67 @@ class MessagePartImageUrl(BaseModel):
     image_url: ImageUrlPart
 
 
-MessagePart = Union[MessagePartText, MessagePartImageUrl]
+MessagePart = MessagePartText | MessagePartImageUrl
 
 
 class ChatMessage(BaseModel):
     role: MessageRole
-    content: Optional[Union[str, list[MessagePart]]] = None
-    name: Optional[str] = None
+    content: str | list[MessagePart] | None = None
+    name: str | None = None
+
+
+class ToolFunctionDefinition(BaseModel):
+    name: str
+    description: str | None = None
+    parameters: dict[str, Any] | None = None
+
+
+class Tool(BaseModel):
+    type: Literal["function"] = "function"
+    function: ToolFunctionDefinition
+
+
+class ToolChoiceFunction(BaseModel):
+    name: str
+
+
+class ToolChoiceObject(BaseModel):
+    type: Literal["function"]
+    function: ToolChoiceFunction
+
+
+class ResponseFormat(BaseModel):
+    type: str
+    json_schema: dict[str, Any] | None = None
 
 
 class ChatCompletionRequest(BaseModel):
     model: str
     messages: list[ChatMessage]
     stream: bool = False
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    max_completion_tokens: Optional[int] = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    tools: list[Tool] | None = None
+    tool_choice: str | ToolChoiceObject | None = None
+    response_format: ResponseFormat | None = None
+
+
+class ToolCallFunction(BaseModel):
+    name: str
+    arguments: str
+
+
+class ToolCall(BaseModel):
+    id: str
+    type: Literal["function"] = "function"
+    function: ToolCallFunction
 
 
 class ChatCompletionResponseMessage(BaseModel):
     role: Literal["assistant"] = "assistant"
-    content: str
+    content: str | None = None
+    tool_calls: list[ToolCall] | None = None
 
 
 class ChatCompletionChoice(BaseModel):
@@ -68,14 +107,14 @@ class ChatCompletionResponse(BaseModel):
 
 
 class DeltaMessage(BaseModel):
-    role: Optional[Literal["assistant"]] = None
-    content: Optional[str] = None
+    role: Literal["assistant"] | None = None
+    content: str | None = None
 
 
 class ChatCompletionChunkChoice(BaseModel):
     index: int
     delta: DeltaMessage
-    finish_reason: Optional[str] = None
+    finish_reason: str | None = None
 
 
 class ChatCompletionChunk(BaseModel):

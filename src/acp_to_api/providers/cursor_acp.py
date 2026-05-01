@@ -5,12 +5,13 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from typing import Any
 
 from acp import PROTOCOL_VERSION, connect_to_agent, text_block
 from acp.connection import StreamDirection, StreamEvent
@@ -36,13 +37,16 @@ from acp.schema import (
 
 from acp_to_api.config import ProviderConfig
 from acp_to_api.openai_models import (
+    ChatCompletionChoice,
     ChatCompletionChunk,
     ChatCompletionChunkChoice,
-    ChatCompletionChoice,
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatCompletionResponseMessage,
     DeltaMessage,
+    ToolCall,
+    ToolCallFunction,
+    ToolChoiceObject,
     Usage,
     message_content_to_text,
 )
@@ -50,16 +54,16 @@ from acp_to_api.providers.base import BaseProvider
 
 logger = logging.getLogger(__name__)
 
-SessionUpdate = Union[
-    UserMessageChunk,
-    AgentMessageChunk,
-    AgentThoughtChunk,
-    ToolCallStart,
-    ToolCallProgress,
-    AgentPlanUpdate,
-    AvailableCommandsUpdate,
-    CurrentModeUpdate,
-]
+SessionUpdate = (
+    UserMessageChunk
+    | AgentMessageChunk
+    | AgentThoughtChunk
+    | ToolCallStart
+    | ToolCallProgress
+    | AgentPlanUpdate
+    | AvailableCommandsUpdate
+    | CurrentModeUpdate
+)
 
 
 @dataclass
@@ -69,18 +73,20 @@ class SessionAccumulator:
 
 
 class CursorACPProvider(BaseProvider):
-    def __init__(self, config: ProviderConfig, raw_acp: bool = False) -> None:
+    def __init__(self, config: ProviderConfig, raw_acp: bool = False, trace_hub: Any = None) -> None:
         self.name = config.name
         self._config = config
         self._raw_acp = raw_acp
+        self._trace_hub = trace_hub
         self._prompt_lock = asyncio.Lock()
         self._states: dict[str, SessionAccumulator] = {}
         self._restart_lock = asyncio.Lock()
-        self._monitor_task: Optional[asyncio.Task[None]] = None
+        self._monitor_task: asyncio.Task[None] | None = None
         self._closed = False
+        self._available_models: list[dict[str, str]] = []
 
-        self._proc: Optional[asyncio.subprocess.Process] = None
-        self._conn: Optional[ClientSideConnection] = None
+        self._proc: asyncio.subprocess.Process | None = None
+        self._conn: ClientSideConnection | None = None
         self._client = _CursorACPClient(self)
 
     # -- Lifecycle -----------------------------------------------------------
@@ -109,7 +115,7 @@ class CursorACPProvider(BaseProvider):
         if proc.stdin is None or proc.stdout is None:
             raise RuntimeError(f"Provider {self.name}: subprocess missing stdin/stdout")
 
-        observers = [self._stream_observer] if self._raw_acp else None
+        observers = [self._stream_observer] if (self._raw_acp or self._trace_hub) else None
         conn = connect_to_agent(
             self._client,
             proc.stdin,
@@ -126,6 +132,7 @@ class CursorACPProvider(BaseProvider):
         )
         self._proc = proc
         self._conn = conn
+        await self._discover_models()
         self._start_monitor()
 
     async def _close_connection(self) -> None:
@@ -152,6 +159,44 @@ class CursorACPProvider(BaseProvider):
             if proc.returncode is None:
                 proc.kill()
                 await proc.wait()
+
+    async def _discover_models(self) -> None:
+        """Open a throwaway session to discover available models from the ACP agent."""
+        conn = self._conn
+        if conn is None:
+            return
+        try:
+            cwd = self._config.cwd or os.getcwd()
+            response = await conn.new_session(cwd=cwd, mcp_servers=[])
+            self._update_models_from_session(response)
+            # Close the probe session immediately
+            with contextlib.suppress(Exception):
+                await conn.close_session(session_id=response.session_id)
+        except Exception as exc:
+            logger.debug("Model discovery for provider '%s' failed: %s", self.name, exc)
+
+    def _update_models_from_session(self, response: Any) -> None:
+        """Extract available models from a NewSessionResponse."""
+        models_state = getattr(response, "models", None)
+        if models_state is None:
+            return
+        available = getattr(models_state, "available_models", None)
+        if not available:
+            return
+        self._available_models = [
+            {
+                "id": m.model_id,
+                "name": getattr(m, "name", m.model_id),
+                "description": getattr(m, "description", None) or "",
+            }
+            for m in available
+        ]
+        logger.info(
+            "Provider '%s' discovered %d models: %s",
+            self.name,
+            len(self._available_models),
+            [m["id"] for m in self._available_models],
+        )
 
     # -- Health monitoring ---------------------------------------------------
 
@@ -205,6 +250,7 @@ class CursorACPProvider(BaseProvider):
         conn = await self._ensure_connection()
         cwd = self._config.cwd or os.getcwd()
         response = await conn.new_session(cwd=cwd, mcp_servers=[])
+        self._update_models_from_session(response)
         session_id = response.session_id
         state = SessionAccumulator()
         self._states[session_id] = state
@@ -216,7 +262,15 @@ class CursorACPProvider(BaseProvider):
     # -- Public API ----------------------------------------------------------
 
     def list_models(self) -> list[str]:
+        if self._available_models:
+            return [m["id"] for m in self._available_models]
         return [self.name]
+
+    def list_models_detail(self) -> list[dict[str, str]]:
+        """Return detailed model info (id, name, description) if available."""
+        if self._available_models:
+            return list(self._available_models)
+        return [{"id": self.name, "name": self.name, "description": ""}]
 
     async def chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         prompt_text = _build_prompt_text(request)
@@ -226,6 +280,9 @@ class CursorACPProvider(BaseProvider):
                 prompt=[text_block(prompt_text)],
             )
 
+            raw_text = "".join(state.chunks).strip()
+            message, finish_reason = _build_response_message(raw_text, request, response.stop_reason)
+
             return ChatCompletionResponse(
                 id=f"chatcmpl-{uuid.uuid4().hex}",
                 created=int(time.time()),
@@ -233,16 +290,14 @@ class CursorACPProvider(BaseProvider):
                 choices=[
                     ChatCompletionChoice(
                         index=0,
-                        message=ChatCompletionResponseMessage(content="".join(state.chunks).strip()),
-                        finish_reason=_map_stop_reason(response.stop_reason),
+                        message=message,
+                        finish_reason=finish_reason,
                     )
                 ],
-                usage=_estimate_usage(prompt_text, "".join(state.chunks)),
+                usage=_estimate_usage(prompt_text, raw_text),
             )
 
-    async def chat_completion_stream(
-        self, request: ChatCompletionRequest
-    ) -> AsyncIterator[ChatCompletionChunk]:
+    async def chat_completion_stream(self, request: ChatCompletionRequest) -> AsyncIterator[ChatCompletionChunk]:
         prompt_text = _build_prompt_text(request)
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         created = int(time.time())
@@ -255,9 +310,7 @@ class CursorACPProvider(BaseProvider):
         )
 
         async with self._prompt_lock, self._session() as (session_id, state, conn):
-            prompt_task = asyncio.create_task(
-                conn.prompt(session_id=session_id, prompt=[text_block(prompt_text)])
-            )
+            prompt_task = asyncio.create_task(conn.prompt(session_id=session_id, prompt=[text_block(prompt_text)]))
 
             try:
                 while True:
@@ -308,12 +361,28 @@ class CursorACPProvider(BaseProvider):
 
     async def _stream_observer(self, event: StreamEvent) -> None:
         direction = "->" if event.direction == StreamDirection.OUTGOING else "<-"
-        logger.debug(
-            "[ACP %s %s] %s",
-            self.name,
-            direction,
-            json.dumps(event.message, ensure_ascii=True, default=str),
-        )
+        body_json = json.dumps(event.message, ensure_ascii=True, default=str)
+
+        if self._raw_acp:
+            logger.debug("[ACP %s %s] %s", self.name, direction, body_json)
+
+        if self._trace_hub is not None:
+            from acp_to_api.dashboard import TraceEvent
+
+            acp_method = ""
+            if isinstance(event.message, dict):
+                acp_method = event.message.get("method", "") or event.message.get("id", "")
+
+            self._trace_hub.push(
+                TraceEvent(
+                    protocol="acp",
+                    direction="outbound" if event.direction == StreamDirection.OUTGOING else "inbound",
+                    provider=self.name,
+                    method=str(acp_method),
+                    summary=body_json[:200],
+                    body=body_json,
+                )
+            )
 
 
 class _CursorACPClient(Client):
@@ -329,9 +398,7 @@ class _CursorACPClient(Client):
     ) -> RequestPermissionResponse:
         for option in options:
             if option.kind in {"allow_once", "allow_always"} and isinstance(option.option_id, str):
-                return RequestPermissionResponse(
-                    outcome=AllowedOutcome(outcome="selected", optionId=option.option_id)
-                )
+                return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", optionId=option.option_id))
         return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
 
     async def session_update(self, session_id: str, update: SessionUpdate, **kwargs: Any) -> None:
@@ -349,7 +416,7 @@ class _CursorACPClient(Client):
         logger.debug("ACP extension notification: %s", method)
 
 
-def _extract_agent_message_text(update: SessionUpdate) -> Optional[str]:
+def _extract_agent_message_text(update: SessionUpdate) -> str | None:
     if not isinstance(update, AgentMessageChunk):
         return None
     content = update.content
@@ -364,7 +431,77 @@ def _build_prompt_text(request: ChatCompletionRequest) -> str:
         text = message_content_to_text(message).strip()
         if text:
             lines.append(f"[{message.role}] {text}")
+
+    if request.tools:
+        target_tool = request.tools[0]
+        if isinstance(request.tool_choice, ToolChoiceObject):
+            for t in request.tools:
+                if t.function.name == request.tool_choice.function.name:
+                    target_tool = t
+                    break
+
+        if target_tool.function.parameters:
+            schema_json = json.dumps(target_tool.function.parameters, indent=2)
+            lines.append(
+                "[INSTRUCTION] You MUST respond with ONLY a valid JSON object matching "
+                "the following JSON schema. Do NOT include markdown, code blocks, or any "
+                "extra text — output the raw JSON object only:\n" + schema_json
+            )
+
     return "\n\n".join(lines)
+
+
+def _build_response_message(
+    raw_text: str,
+    request: ChatCompletionRequest,
+    stop_reason: str,
+) -> tuple[ChatCompletionResponseMessage, str]:
+    if not request.tools:
+        return ChatCompletionResponseMessage(content=raw_text), _map_stop_reason(stop_reason)
+
+    target_name = request.tools[0].function.name
+    if isinstance(request.tool_choice, ToolChoiceObject):
+        target_name = request.tool_choice.function.name
+
+    json_str = _extract_json(raw_text)
+    if json_str is not None:
+        tool_call = ToolCall(
+            id=f"call_{uuid.uuid4().hex[:24]}",
+            function=ToolCallFunction(name=target_name, arguments=json_str),
+        )
+        return ChatCompletionResponseMessage(tool_calls=[tool_call]), "tool_calls"
+
+    return ChatCompletionResponseMessage(content=raw_text), _map_stop_reason(stop_reason)
+
+
+def _extract_json(text: str) -> str | None:
+    """Extract the first valid JSON object from text that may include markdown or prose."""
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        candidate = match.group(1)
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and start < end:
+        candidate = text[start : end + 1]
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+
+    return None
 
 
 def _map_stop_reason(stop_reason: str) -> str:

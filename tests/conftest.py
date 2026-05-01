@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -31,9 +32,15 @@ def _wait_for_health(url: str, timeout_s: float = 30.0) -> None:
     raise RuntimeError(f"Server did not become healthy in {timeout_s}s")
 
 
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 @pytest.fixture(scope="session")
 def server_port() -> int:
-    return 18134
+    return _free_port()
 
 
 @pytest.fixture(scope="session")

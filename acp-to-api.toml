@@ -1,8 +1,12 @@
 port = 11434
-host = "0.0.0.0"
+host = "127.0.0.1"
 raw_acp = false
 raw_rest = false
 
 [providers.cursor]
 command = "agent"
 args = ["acp"]
+
+[providers.kiro]
+command = "kiro-cli"
+args = ["acp", "--trust-all-tools"]
