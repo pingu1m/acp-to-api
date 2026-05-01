@@ -17,6 +17,20 @@ Multi-provider ACP proxy CLI that exposes OpenAI-compatible REST APIs backed by 
 - **Config hot-reload** -- watches config file for changes and applies them automatically
 - **XDG directories** -- follows XDG Base Directory spec for config and state
 
+## Quick start (no install needed)
+
+Run directly with `uvx` -- nothing to install:
+
+```bash
+uvx acp-to-api serve --provider '{"name":"cursor","command":"agent","args":["acp"]}'
+```
+
+Or with a config file:
+
+```bash
+uvx acp-to-api serve --config acp-to-api.toml
+```
+
 ## Install
 
 ```bash
@@ -43,18 +57,6 @@ uv sync --dev
 - At least one ACP provider CLI installed (e.g. Cursor `agent`, `kiro-cli`, `codex-acp`, `claude-code-acp`)
 
 This project uses the official [ACP Python SDK](https://github.com/agentclientprotocol/python-sdk).
-
-## Quick start
-
-```bash
-acp-to-api serve --config acp-to-api.toml
-```
-
-Or with inline provider JSON:
-
-```bash
-acp-to-api serve --provider '{"name":"cursor","command":"agent","args":["acp"]}'
-```
 
 ## Configuration
 
@@ -96,17 +98,17 @@ print(resp.choices[0].message.content)
 ## Daemon mode
 
 ```bash
-acp-to-api start --config acp-to-api.toml   # background
-acp-to-api status
-acp-to-api stop
-acp-to-api restart --config acp-to-api.toml
+uvx acp-to-api start --config acp-to-api.toml   # background
+uvx acp-to-api status
+uvx acp-to-api stop
+uvx acp-to-api restart --config acp-to-api.toml
 ```
 
 Install as a system service (auto-start on boot):
 
 ```bash
-acp-to-api setup --config acp-to-api.toml   # macOS launchd / Linux systemd
-acp-to-api setup --uninstall
+uvx acp-to-api setup --config acp-to-api.toml   # macOS launchd / Linux systemd
+uvx acp-to-api setup --uninstall
 ```
 
 ## Dashboard
@@ -135,14 +137,14 @@ Open `http://127.0.0.1:11434/dashboard` to see live trace events, manage provide
 ## Run tests
 
 ```bash
-uv run pytest -q
+uvx --from . --with pytest --with httpx --with pytest-asyncio pytest -v
 ```
 
 ## Lint and format
 
 ```bash
-uv run ruff check .
-uv run ruff format .
+uvx ruff check .
+uvx ruff format .
 ```
 
 ## Build and publish

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.1 (2026-05-01)
+
+### Changed
+
+- All justfile recipes and README examples now use `uvx` (zero-install runs)
+- `serve` command allows starting with zero providers (add via API later)
+- Added `AGENTS.md` and `.codex/config.toml` for Codex CLI integration
+
+### Fixed
+
+- CI test reliability: removed stub provider that caused 30s startup hang
+- Foreground server fixture now captures stderr for faster CI debugging
+
 ## 0.1.0 (2026-05-01)
 
 Initial release.
