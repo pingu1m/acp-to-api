@@ -113,7 +113,7 @@ def serve(
         raise typer.BadParameter(str(exc)) from exc
 
     if not app_config.providers:
-        raise typer.BadParameter("No providers configured. Use --config or --provider.")
+        typer.echo("Warning: no providers configured. Add via --config, --provider, or the API.", err=True)
 
     fastapi_app = create_app(app_config)
     uvicorn.run(fastapi_app, host=app_config.host, port=app_config.port)

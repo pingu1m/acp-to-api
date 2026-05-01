@@ -53,8 +53,7 @@ def _wait_for_health(
             if stderr_path and stderr_path.exists():
                 stderr_text = stderr_path.read_text()[-2000:]
             raise RuntimeError(
-                f"Server process exited with code {proc.returncode} before "
-                f"becoming healthy.\nstderr:\n{stderr_text}"
+                f"Server process exited with code {proc.returncode} before becoming healthy.\nstderr:\n{stderr_text}"
             )
         try:
             r = httpx.get(url, timeout=2.0)
@@ -66,10 +65,7 @@ def _wait_for_health(
     stderr_text = ""
     if stderr_path and stderr_path.exists():
         stderr_text = stderr_path.read_text()[-2000:]
-    raise RuntimeError(
-        f"Server on port {port} did not become healthy in {timeout}s\n"
-        f"stderr:\n{stderr_text}"
-    )
+    raise RuntimeError(f"Server on port {port} did not become healthy in {timeout}s\nstderr:\n{stderr_text}")
 
 
 def _wait_for_down(port: int, timeout: float = 10.0) -> None:
