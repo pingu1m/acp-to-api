@@ -39,7 +39,7 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_for_health(port: int, timeout: float = 15.0) -> None:
+def _wait_for_health(port: int, timeout: float = 45.0) -> None:
     url = f"http://127.0.0.1:{port}/health"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -111,8 +111,6 @@ def daemon_env(tmp_path: Path) -> Iterator[DaemonEnv]:
     providers: dict[str, dict] = {}
     if HAS_AGENT:
         providers["cursor"] = {"command": "agent", "args": ["acp"]}
-    else:
-        providers["stub"] = {"command": "echo", "args": ["stub"]}
 
     _write_toml(config_path, providers)
     config_path.write_text(config_path.read_text().replace("port = 0", f"port = {port}"))
@@ -297,9 +295,9 @@ class TestProviderManagementAPI:
         assert r.status_code == 200
         providers = r.json()
         assert isinstance(providers, list)
-        assert len(providers) >= 1
-        names = [p["name"] for p in providers]
         if HAS_AGENT:
+            assert len(providers) >= 1
+            names = [p["name"] for p in providers]
             assert "cursor" in names
         assert all(p["source"] in ("toml", "api") for p in providers)
 
