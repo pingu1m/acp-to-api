@@ -1,0 +1,5 @@
+model = "o4-mini"
+approval_policy = "unless-allow-listed"
+
+[history]
+persistence = "none"
